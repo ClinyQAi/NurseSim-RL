@@ -9,3 +9,4 @@ peft
 bitsandbytes
 accelerate
 agentbeats
+gymnasium
