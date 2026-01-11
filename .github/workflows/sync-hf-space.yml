@@ -6,7 +6,12 @@ on:
     paths:
       - 'app.py'
       - 'requirements.txt'
-      - 'MODEL_CARD.md'
+      - 'README.md'
+      - 'Dockerfile'
+      - 'run.sh'
+      - 'agent_main.py'
+      - '.well-known/**'
+      - 'nursesim_rl/**'
 
 jobs:
   sync-to-hub:
@@ -31,11 +36,21 @@ jobs:
         # Copy updated files
         cp app.py hf-space/app.py
         cp requirements.txt hf-space/requirements.txt
-        cp MODEL_CARD.md hf-space/README.md
+        cp max-requirements.txt hf-space/max-requirements.txt 2>/dev/null || true
+        cp README.md hf-space/README.md
+        cp Dockerfile hf-space/Dockerfile
+        cp run.sh hf-space/run.sh
+        cp agent_main.py hf-space/agent_main.py
+        
+        # Copy directories
+        rm -rf hf-space/.well-known hf-space/nursesim_rl
+        cp -r .well-known hf-space/
+        cp -r nursesim_rl hf-space/
         
         # Push to HF Space
         cd hf-space
         git add .
+        git status
         git commit -m "🚀 Auto-sync from GitHub: ${GITHUB_SHA::7}" || echo "No changes to commit"
         git push https://NurseCitizenDeveloper:$HF_TOKEN@huggingface.co/spaces/NurseCitizenDeveloper/NurseSim-Triage-Demo main
         
