@@ -1,8 +1,12 @@
 import gradio as gr
 import spaces
 import torch
+import os
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
+
+# Get HF token from environment (set as a Space secret)
+HF_TOKEN = os.environ.get("HF_TOKEN")
 
 # Global model/tokenizer
 model = None
@@ -14,7 +18,7 @@ def load_model():
         base_model_id = "meta-llama/Llama-3.2-3B-Instruct"
         adapter_id = "NurseCitizenDeveloper/NurseSim-Triage-Llama-3.2-3B"
         
-        tokenizer = AutoTokenizer.from_pretrained(adapter_id)
+        tokenizer = AutoTokenizer.from_pretrained(adapter_id, token=HF_TOKEN)
         
         # Load base model in 4-bit
         model = AutoModelForCausalLM.from_pretrained(
@@ -22,9 +26,10 @@ def load_model():
             torch_dtype=torch.float16,
             device_map="auto",
             load_in_4bit=True,
+            token=HF_TOKEN,  # Pass token for gated model access
         )
         # Apply LoRA adapters
-        model = PeftModel.from_pretrained(model, adapter_id)
+        model = PeftModel.from_pretrained(model, adapter_id, token=HF_TOKEN)
         model.eval()
     return model, tokenizer
 
