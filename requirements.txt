@@ -1,13 +1,9 @@
 # NurseSim-Triage Gradio Demo - Hugging Face Spaces Requirements
-# Compatible with ZeroGPU
+# Compatible with ZeroGPU (No Unsloth - uses standard Transformers+PEFT)
 
 gradio>=4.0.0
 torch
-torchvision
 transformers
 peft
 bitsandbytes
 accelerate
-unsloth @ git+https://github.com/unslothai/unsloth.git
-unsloth_zoo
-xformers
