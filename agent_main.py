@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-NurseSim-Triage A2A Agent Entry Point
+NurseSim-Triage Hybrid Agent Entry Point
 
-This module implements the Agent-to-Agent (A2A) protocol interface for NurseSim-Triage.
-It creates a persistent FastAPI server to handle requests from the AgentBeats platform.
+This module combines the A2A API (for AgentBeats) and the Gradio UI (for Human/Demo)
+into a single FastAPI application listening on port 7860.
 """
 
 import os
@@ -11,6 +11,7 @@ import json
 import torch
 import uvicorn
 import asyncio
+import gradio as gr
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -40,7 +41,7 @@ class TaskInput(BaseModel):
 
 class NurseSimTriageAgent:
     """
-    A2A-compatible triage agent for clinical assessment.
+    Shared agent logic for both API and UI.
     """
     
     def __init__(self):
@@ -62,7 +63,7 @@ class NurseSimTriageAgent:
             base_model_id = "meta-llama/Llama-3.2-3B-Instruct"
             adapter_id = "NurseCitizenDeveloper/NurseSim-Triage-Llama-3.2-3B"
             
-            # Offload heavy loading to thread to avoid blocking event loop
+            # Offload heavy loading to thread
             await asyncio.to_thread(self._load_weights, base_model_id, adapter_id)
             
             print("✅ Model loaded successfully!")
@@ -73,14 +74,9 @@ class NurseSimTriageAgent:
 
     def _load_weights(self, base_model_id, adapter_id):
         print(f"Loading tokenizer from {adapter_id}...")
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            adapter_id,
-            token=self.HF_TOKEN
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(adapter_id, token=self.HF_TOKEN)
         
         print(f"Loading base model {base_model_id} with 4-bit quantization...")
-        
-        # Modern 4-bit loading configuration
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.float16,
@@ -97,32 +93,15 @@ class NurseSimTriageAgent:
         )
         
         print(f"Applying LoRA adapters from {adapter_id}...")
-        self.model = PeftModel.from_pretrained(
-            self.model,
-            adapter_id,
-            token=self.HF_TOKEN
-        )
+        self.model = PeftModel.from_pretrained(self.model, adapter_id, token=self.HF_TOKEN)
         self.model.eval()
 
-    def process_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
-        """Process an A2A task and return the triage assessment."""
+    def get_response(self, complaint: str, hr: int, bp: str, spo2: int, temp: float) -> str:
+        """Shared inference logic."""
         if self.model is None:
-            return {
-                "error": "ModelStillLoading", 
-                "message": "The agent is still warming up. Please retry in 30 seconds."
-            }
+            return "⚠️ System is warming up. Please try again in 30 seconds."
 
-        try:
-            # Extract task data
-            complaint = task.get("complaint", "")
-            vitals = task.get("vitals", {})
-            hr = vitals.get("heart_rate", 80)
-            bp = vitals.get("blood_pressure", "120/80")
-            spo2 = vitals.get("spo2", 98)
-            temp = vitals.get("temperature", 37.0)
-            
-            # Create prompt
-            prompt = f"""### Instruction:
+        prompt = f"""### Instruction:
 You are an expert A&E Triage Nurse. Assess the following patient and provide your triage decision.
 
 ### Input:
@@ -130,41 +109,53 @@ Patient Complaint: {complaint}
 Vitals: HR {hr}, BP {bp}, SpO2 {spo2}%, Temp {temp}C.
 
 ### Response:"""
+        
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=256,
+                do_sample=True,
+                temperature=0.7,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
+        
+        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        if "### Response:" in response:
+            response = response.split("### Response:")[-1].strip()
             
-            # Tokenize and generate
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-            
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=256,
-                    do_sample=True,
-                    temperature=0.7,
-                    pad_token_id=self.tokenizer.eos_token_id,
-                )
-            
-            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
-            if "### Response:" in response:
-                response = response.split("### Response:")[-1].strip()
-            
-            triage_category = self._extract_triage_category(response)
+        return response
+
+    def process_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """Process an API task."""
+        if self.model is None:
+            return {
+                "error": "ModelStillLoading", 
+                "message": "The agent is still warming up. Please retry in 30 seconds."
+            }
+
+        try:
+            complaint = task.get("complaint", "")
+            vitals = task.get("vitals", {})
+            response = self.get_response(
+                complaint, 
+                vitals.get("heart_rate", 80),
+                vitals.get("blood_pressure", "120/80"),
+                vitals.get("spo2", 98),
+                vitals.get("temperature", 37.0)
+            )
             
             return {
-                "triage_category": triage_category,
+                "triage_category": self._extract_triage_category(response),
                 "assessment": response,
                 "recommended_action": self._extract_recommended_action(response)
             }
             
         except Exception as e:
-            return {
-                "error": str(e),
-                "triage_category": "Error",
-                "assessment": f"Error processing task: {str(e)}"
-            }
+            return {"error": str(e), "triage_category": "Error"}
     
     def _extract_triage_category(self, response: str) -> str:
-        """Extract the triage category from the model's response."""
         response_lower = response.lower()
         if "immediate" in response_lower or "resuscitation" in response_lower: return "Immediate"
         elif "very urgent" in response_lower or "emergency" in response_lower: return "Very Urgent"
@@ -179,7 +170,6 @@ Vitals: HR {hr}, BP {bp}, SpO2 {spo2}%, Temp {temp}C.
         else: return "Continue assessment and treatment as per protocol"
     
     def health_check(self) -> Dict[str, Any]:
-        """Return agent health status."""
         return {
             "status": "healthy" if self.model is not None else "loading",
             "model_loaded": self.model is not None,
@@ -187,25 +177,19 @@ Vitals: HR {hr}, BP {bp}, SpO2 {spo2}%, Temp {temp}C.
         }
 
 # ==========================================
-# FastAPI Lifecycle & App
+# Application Setup
 # ==========================================
 
 agent = NurseSimTriageAgent()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Load model in background
     print("🚀 Server starting. Triggering model load task...")
     asyncio.create_task(agent.load_model())
     yield
-    # Shutdown logic (if any)
     print("🛑 Server shutting down.")
 
-app = FastAPI(
-    title="NurseSim-Triage Agent",
-    version="1.1.0",
-    lifespan=lifespan
-)
+app = FastAPI(title="NurseSim-Triage Agent", version="1.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -215,12 +199,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
-async def root():
-    return {
-        "message": "NurseSim-Triage Agent Online",
-        "status": agent.health_check()["status"]
-    }
+# ==========================================
+# API Endpoints
+# ==========================================
 
 @app.get("/health")
 async def health_check():
@@ -242,9 +223,50 @@ async def process_task(task: TaskInput):
     return result
 
 # ==========================================
-# Entry Point
+# Gradio UI Integration
 # ==========================================
 
+def gradio_predict(complaint, hr, bp, spo2, temp):
+    return agent.get_response(complaint, hr, bp, spo2, temp)
+
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
+    gr.Markdown("""
+    # 🩺 NurseSim AI: Emergency Triage Simulator
+    **An AI agent fine-tuned for the Manchester Triage System (MTS).**
+    *Developed for the OpenEnv Challenge by NurseCitizenDeveloper.*
+    
+    > ⚡ **Hybrid Mode**: Serving both Gradio UI and A2A API (AgentBeats)
+    """)
+    
+    with gr.Row():
+        with gr.Column():
+            complaint = gr.Textbox(label="Chief Complaint", placeholder="e.g., Shortness of breath...")
+            with gr.Row():
+                hr = gr.Number(label="Heart Rate", value=80)
+                bp = gr.Textbox(label="Blood Pressure", placeholder="e.g., 120/80")
+            with gr.Row():
+                spo2 = gr.Slider(label="SpO2 (%)", minimum=50, maximum=100, value=98)
+                temp = gr.Number(label="Temperature (C)", value=37.0)
+            
+            submit_btn = gr.Button("Assess Patient", variant="primary")
+            
+        with gr.Column():
+            output_text = gr.Textbox(label="AI Triage Assessment", lines=10)
+            gr.Markdown("### ⚠️ Research Prototype - Not for Clinical Use")
+
+    submit_btn.click(gradio_predict, inputs=[complaint, hr, bp, spo2, temp], outputs=output_text)
+    
+    gr.Examples(
+        examples=[
+            ["Crushing chest pain and nausea", 110, "90/60", 94, 37.2],
+            ["Twisted ankle at football", 75, "125/85", 99, 36.8],
+        ],
+        inputs=[complaint, hr, bp, spo2, temp]
+    )
+
+# Mount Gradio app to FastAPI at root
+app = gr.mount_gradio_app(app, demo, path="/")
+
 if __name__ == "__main__":
-    print("Starting A2A Server on port 7860...")
+    print("Starting Hybrid Server on port 7860...")
     uvicorn.run(app, host="0.0.0.0", port=7860)
