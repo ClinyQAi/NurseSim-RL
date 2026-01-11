@@ -1,3 +1,12 @@
+---
+title: NurseSim Triage
+emoji: 🏥
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
+
 # NurseSim-RL: A Healthcare Agent Environment for Clinical Triage
 
 [![OpenEnv Challenge](https://img.shields.io/badge/OpenEnv-Challenge%202026-blue)](https://rdi.berkeley.edu/agentx-agentbeats)
