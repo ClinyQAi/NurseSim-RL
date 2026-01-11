@@ -1,26 +1,34 @@
 import gradio as gr
 import spaces
-from unsloth import FastLanguageModel
 import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 
-# Global model/tokenizer (loaded once on first GPU call)
+# Global model/tokenizer
 model = None
 tokenizer = None
 
 def load_model():
     global model, tokenizer
     if model is None:
-        model_id = "NurseCitizenDeveloper/NurseSim-Triage-Llama-3.2-3B"
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=model_id,
-            max_seq_length=2048,
+        base_model_id = "meta-llama/Llama-3.2-3B-Instruct"
+        adapter_id = "NurseCitizenDeveloper/NurseSim-Triage-Llama-3.2-3B"
+        
+        tokenizer = AutoTokenizer.from_pretrained(adapter_id)
+        
+        # Load base model in 4-bit
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model_id,
+            torch_dtype=torch.float16,
+            device_map="auto",
             load_in_4bit=True,
         )
-        FastLanguageModel.for_inference(model)
+        # Apply LoRA adapters
+        model = PeftModel.from_pretrained(model, adapter_id)
+        model.eval()
     return model, tokenizer
 
-# ZeroGPU decorator - GPU is only used when this function is called
-@spaces.GPU(duration=60)
+@spaces.GPU(duration=120)
 def triage_patient(complaint, hr, bp, spo2, temp):
     model, tokenizer = load_model()
     
@@ -33,18 +41,21 @@ Vitals: HR {hr}, BP {bp}, SpO2 {spo2}%, Temp {temp}C.
 
 ### Response:"""
 
-    inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     
-    outputs = model.generate(
-        **inputs, 
-        max_new_tokens=256,
-        use_cache=True,
-    )
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs, 
+            max_new_tokens=256,
+            do_sample=True,
+            temperature=0.7,
+            pad_token_id=tokenizer.eos_token_id,
+        )
     
-    response = tokenizer.batch_decode(outputs)[0]
+    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
     
     if "### Response:" in response:
-        response = response.split("### Response:")[1].strip()
+        response = response.split("### Response:")[-1].strip()
     
     return response
 
@@ -55,12 +66,12 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
     **An AI agent fine-tuned for the Manchester Triage System (MTS).**
     *Developed for the OpenEnv Challenge by NurseCitizenDeveloper.*
     
-    > ⚡ Powered by **ZeroGPU** - Model loads on-demand for efficient inference.
+    > ⚡ Powered by **ZeroGPU** - Model loads on-demand.
     """)
     
     with gr.Row():
         with gr.Column():
-            complaint = gr.Textbox(label="Chief Complaint", placeholder="e.g., Shortness of breath and chest tightness...")
+            complaint = gr.Textbox(label="Chief Complaint", placeholder="e.g., Shortness of breath...")
             with gr.Row():
                 hr = gr.Number(label="Heart Rate", value=80)
                 bp = gr.Textbox(label="Blood Pressure", placeholder="e.g., 120/80")
@@ -74,8 +85,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
             output_text = gr.Textbox(label="AI Triage Assessment", lines=10)
             gr.Markdown("""
             ### ⚠️ Safety Warning
-            This is a research prototype for the **OpenEnv Challenge**. 
-            It is based on a fine-tuned Llama 3.2 model and is **NOT** a certified medical device.
+            This is a research prototype. **NOT** a certified medical device.
             """)
 
     submit_btn.click(
@@ -87,8 +97,8 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
     gr.Examples(
         examples=[
             ["Crushing chest pain and nausea", 110, "90/60", 94, 37.2],
-            ["Twisted ankle at football, walking with difficulty", 75, "125/85", 99, 36.8],
-            ["High fever and confusion in elderly patient", 105, "100/70", 92, 39.5],
+            ["Twisted ankle at football", 75, "125/85", 99, 36.8],
+            ["High fever and confusion", 105, "100/70", 92, 39.5],
         ],
         inputs=[complaint, hr, bp, spo2, temp]
     )
