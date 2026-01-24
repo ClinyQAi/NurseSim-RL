@@ -219,7 +219,7 @@ Evaluated on 15 Gold-Standard Clinical Scenarios using GPT-5.2 as a Clinical Jud
 ### 🧠 Key Methodology: Age-Aware Triage
 Our validation revealed that **parsing Age and Gender** from the patient description is critical for accurate risk stratification (e.g., separating "Chest Pain" in a 72M vs 20M). The model effectively learned these demographic risk factors, improving accuracy from 16% to 60%.
 
-See our [W&B Report](https://wandb.ai/mrlincs-nursing-citizen-development/huggingface) for detailed training curves.
+See our [W&B Report]([https://api.wandb.ai/links/mrlincs-nursing-citizen-development/yg3hzy60]) for detailed training curves.
 
 ## 🩺 Clinical Framework: Manchester Triage System
 
