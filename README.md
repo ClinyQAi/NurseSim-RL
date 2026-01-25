@@ -30,6 +30,7 @@ pinned: false
 - **Expanded Dataset:** Trained on **2,100+** synthetic patient scenarios across all 5 MTS categories.
 - **Safety-Aware Rewards:** Heavy penalties for under-triaging critical patients.
 - **Fine-Tuned Agent:** Llama 3.2 3B trained with Unsloth (4-bit QLoRA) - **60% accuracy validated**.
+- **NEW: Semantic RL Mode:** NurseEmbed-powered text embeddings for language-conditioned agents.
 - **Age-Aware Triage:** Demographic parsing for accurate risk stratification.
 - **A2A Protocol:** Agent-to-Agent evaluation via AgentBeats platform.
 - **Docker Deployment:** Fully containerized for reproducibility.
